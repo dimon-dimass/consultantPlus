@@ -14,7 +14,7 @@
 - **Apache Maven** - Скачать фреймворк по ссылке: *https://maven.apache.org/download.cgi*. Установить в переменной окружения *Path = :path/to/maven/bin*
 - **Scala** - Скачать установщик Coursier по ссылке: *https://www.scala-lang.org/download/*. Установить в переменной окружения *Path = :path/to/Coursier/bin*
 - winutil.exe for Hadoop - Скачать необходимые компоненты для корректной работы с SparkContext по ссылке: *https://github.com/cdarlint/winutils/tree/master*. Установить в переменных окружения *HADOOP_HOME = :path/to/hadoop* и *Path = HADOOP_HOME/bin*. В случае, возникновения повторяющейся ошибки:
-  (`***Exception in thread "main" java.lang.UnsatisfiedLinkError: 'boolean org.apache.hadoop.io.nativeio.NativeIO$Windows.access0(java.lang.String, int)'***`)
+  `Exception in thread "main" java.lang.UnsatisfiedLinkError: 'boolean org.apache.hadoop.io.nativeio.NativeIO$Windows.access0(java.lang.String, int)'`
 поместить hadoop.dll в *C:Windows/System32*.
 
 ## Задание №2
