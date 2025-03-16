@@ -1,7 +1,7 @@
 # consultantPlus
 Результаты заданий №1 и №2 представленны в виде текстового (.txt) и CSV (.csv) файлов соответственно в директориях output/task1 и output/task2
 
-### Для правильного запуска через Intellij IDEA необходимо склонировать данный репозиторий, поместить в корневой директории директорию с файлами по именем sessions и в меню инструментов программы: Run -> Edit Configurations -> Add New Configuration -> Application -> Определить Имя -> Определить Java SDK (8,11,17) -> Modify option (Build and Run) -> Use classpath of module -> Определить classpath и модуль -> Apply and Run
+### Для правильного запуска через Intellij IDEA необходимо склонировать данный репозиторий, поместить в корневой директории директорию с файлами поl именем sessions и в меню инструментов программы настроить builder: Run -> Edit Configurations -> Add New Configuration -> Application -> Определить Имя -> Определить Java SDK (8,11,17) -> Modify option (Build and Run) -> Use classpath of module -> Определить classpath и модуль -> Apply and Run
 
 # Задание №2
 Для второго задания результирующим форматом записи стала последовательность из [Дата, Идентификатор документа, Количество открытий в разрезе дня]
