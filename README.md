@@ -14,7 +14,7 @@
 
 ## Структура проекта
 
-- **src/main/scala/Main.scala**: Исходный код программы. Внутри основной функции main описаны функции cardSearchCount(String: targetId) и qsDocOpenCount() для решения заданий №1 и №2 соответственно.
+- **src/main/scala/Main.scala**: Исходный код программы. Внутри основной функции <span style="color:lightred;">main</span> описаны функции <span style="color:lightblue;">cardSearchCount(String: targetId)</span> и <span style="color:lightblue;">qsDocOpenCount()</span> для решения заданий №1 и №2 соответственно.
 - **pom.xml**: Файл формата (`.xml`), предназначенный для сборки зависимостей с помощью архитектуры Apache Maven.
 - **output/task1**: Результаты выполнения задания №1 сохраняются в текстовом формате (`.txt`).
 - **output/task2**: Результаты выполнения задания №2 сохраняются в CSV-формате (`.csv`).
