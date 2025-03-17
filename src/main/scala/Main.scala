@@ -15,6 +15,7 @@ object Main {
     val sc = spark.sparkContext
     val logsData = sc.wholeTextFiles(logsPath) // формируем датасеты (logPath, logContent)
 
+    // функция решения задачи №2
     def qsDocOpenCount(): Unit = {
       // преобразуем датасет (logPath, logContent) в датасет ((logDate, docId), count)
       val dateData = logsData.flatMap {
@@ -59,17 +60,16 @@ object Main {
 //    }
 
 
-    // определим под алгоритм задачи функцию
+    // функция решения задачи №1
     def cardSearchCount(targetId: String): Long = {
 
       // в следующей переменной формируем датасеты содержащие только блоки CARD_SEARCH в аналогичном формате
       val cardSearchData = logsData.flatMap { case (filePath, content) =>
 
         val lines = content.split("\n")
-        var cardSearch = ""
+        var cardSearch = scala.collection.mutable.ArrayBuffer[String]()
         var inCSB = false
         var current = ""
-
         for (line <- lines) {
           if (line.startsWith("CARD_SEARCH_START")) {
             inCSB = true
@@ -86,10 +86,10 @@ object Main {
         // в случае, если в логе не было соответствующего блока, не записываем (None) в новый датасет
         if (cardSearch.isEmpty)
           None
-        else
-          Some((filePath, cardSearch))
+        else {
+          cardSearch.map( block => (filePath, block) )
+        }
       }
-
       // производим фильтрацию по необходимому идетификатору
       val targetData = cardSearchData.filter { case (_, block) =>
         block.contains(targetId)
@@ -98,11 +98,11 @@ object Main {
       val writer = new PrintWriter(s"output/task1/$targetId.txt")
       writer.println(s"Количество раз, когда в карточке производили поиск документа с идентификатором $targetId: $tDataCount")
       writer.close()
+      println(s"COUNT: $tDataCount")
       tDataCount
     }
     qsDocOpenCount()
     cardSearchCount("ACC_45616")
-//    println(s"ЗАДАЧА №1 \n ACC_45616 Card Search count is: ${cardSearchCount("ACC_45616")}")
     println(s"ЗАДАЧА №1 & №2 \nДля просмотра результатов перейдите в /output и просмотрите результаты в TXT и CSV формате, соответственно")
     spark.stop
   }
