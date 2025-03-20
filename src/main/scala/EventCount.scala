@@ -1,15 +1,28 @@
 import org.apache.spark.sql.SparkSession
 import org.apache.hadoop.fs.{FileSystem, Path}
+
 import scala.io.Source
+import scala.collection.mutable
 import java.io.File
 import com.example.utils.TestUtils._
 import com.example.utils.Constants.EVENTS
 import org.apache.spark.SparkContext
+
+import java.time.format.DateTimeFormatter
+import java.time.{LocalDateTime, ZonedDateTime}
+import java.util.Locale
 import java.util.regex.Pattern
 import scala.collection.mutable.ArrayBuffer
 
 object EventCount {
   System.setProperty("hadoop.home.dir", "C:/hadoop")
+
+  private val inputFormatter = DateTimeFormatter.ofPattern("EEE,_dd_MMM_yyyy_HH:mm:ssZ", Locale.ENGLISH)
+  private val inputFormatterD = DateTimeFormatter.ofPattern("EEE,_d_MMM_yyyy_HH:mm:ssZ", Locale.ENGLISH)
+  private val dmyFormatter = DateTimeFormatter.ofPattern("dd-MM-yyyy'T'HH:mm:ss")
+  private val dmyFormatterZ = DateTimeFormatter.ofPattern("dd-MM-yyyy'T'HH:mm:ssZ")
+  private var dateTimeZ: ZonedDateTime = null
+  private var dateTime: LocalDateTime = null
   private val pattern = Pattern.compile("""\{[^}]*}|\[[^]]*]|<[^>]*>|"[^"]*"|'[^']*'|\([^)]\)*|\S+""")
 
 
@@ -23,89 +36,124 @@ object EventCount {
     result.toArray
   }
 
-  private def formEventRDD(iterator: Iterator[String], event: String, target: Any): Iterator[((String, String), Int)] = {
-    var blockArray = ArrayBuffer[String]()
-  // Переменная-флаг, говорит о том, что нового события еще не наступило и можно продолжать обрабатывать строки
-    var inEB = false
+  //  Функция заполнения объектов Map и ArrayBuffer подходящими элементами: Map(date, qsId) & ArrayBuffer[docIds]
+  private def collectMapArr(blockMap: mutable.Map[String,String], requestArray: ArrayBuffer[String],
+                            fragments: Array[String], target: Any): Unit = {
+    //  Фильтрация элементов, которые не соответствуют формату <База>_<НомерДокумента>
+    val filteredFragments = fragments.filter { elem =>
+      if (!elem.matches("^\\w+\\d+_+\\d+$"))
+        true
+      else false
+    }
+    filteredFragments.foreach { d =>
+      d match {
+        //  Случай, если даты записаны в формате: dd.MM.yyyy_HH:mm:ss[Z] или yyyy.MM.dd_HH:mm:ss[Z]
+        case d if "(\\d{2})[/.-](\\d{2})[/.-](\\d{4})[_T]".r.findFirstIn(d).isDefined || "(\\d{4})[/.-](\\d{2})[/.-](\\d{2})[_T]".r.findFirstIn(d).isDefined =>
+          var date: String = null
+          if (":(\\d{2})[_+-]\\d+".r.findFirstIn(d).isDefined) {
+            if ("(\\d{4})[/.-](\\d{2})[/.-](\\d{2})[_T]".r.findFirstIn(d).isDefined) {
+              date = d.replaceAll("[./]", "-").replaceAll("_(\\d{2}:)", "T$1")
+              dateTimeZ = ZonedDateTime.parse(date)
+            }
+            else {
+              date = d.replaceAll("[./]", "-").replaceAll("_(\\d{2}:)", "T$1")
+              dateTimeZ = ZonedDateTime.parse(date, dmyFormatterZ)
+            }
+            val outputFormatter = DateTimeFormatter.ofPattern("dd.MM.yyyy")
+            val dateTimeOut = dateTimeZ.format(outputFormatter)
+            val key = "date"
+            blockMap.put(key, blockMap.getOrElse(key, dateTimeOut))
+          }
+          else {
+            if ("(\\d{4})[/.-](\\d{2})[/.-](\\d{2})[_T]".r.findFirstIn(d).isDefined) {
+              date = d.replaceAll("[./]", "-").replaceAll("_(\\d{2}:)", "T$1")
+              dateTime = LocalDateTime.parse(date)
+            }
+            else {
+              date = d.replaceAll("[./]", "-").replaceAll("_(\\d{2}:)", "T$1")
+              dateTime = LocalDateTime.parse(date, dmyFormatter)
+            }
+            val outputFormatter = DateTimeFormatter.ofPattern("dd.MM.yyyy")
+            val dateTimeOut = dateTime.format(outputFormatter)
+            val key = "date"
+            blockMap.put(key, blockMap.getOrElse(key, dateTimeOut))
+          }
+        //  Случай, если timestamp записан в формате: Sun,_dd_MMM_yyyy_HH:mm:ssZ
+        case d if "[a-zA-Z]+,_\\d+_[a-zA-Z]+_\\d+_\\d+:\\d+:\\d+_.\\d+".r.findFirstIn(d).isDefined =>
+          val timezone = d.replaceAll("_([+-])", "$1")
+          if ("\\d+".r.findFirstIn(d).toString.length == 2)
+            dateTime = LocalDateTime.parse(timezone, inputFormatter)
+          else dateTime = LocalDateTime.parse(timezone, inputFormatterD)
+          val outputFormatter = DateTimeFormatter.ofPattern("dd.MM.yyyy")
+          val dateTimeOut = dateTime.format(outputFormatter)
+          val key = "date"
+          blockMap.put(key, blockMap.getOrElse(key, dateTimeOut))
+        //  Проверка идентификатора События: предполагаем числовое значение длиною >= 4 символа
+        case d if d.trim.length >= 4 && "^-?\\d+$".r.findFirstIn(d).isDefined =>
+          val key = "eventId"
+          blockMap.put(key, blockMap.getOrElse(key, d))
+        case d if EVENTS.contains(d) =>
+          val key = "event"
+          blockMap.put(key, blockMap.getOrElse(key, d))
+        case _ => 
+      }
+    }
+    //  Элементы соответствующие формату <База>_<НомерДокумента>, кладем в массив ArrayBuffer
+    requestArray ++= fragments.filter { fragment =>
+      target match {
+        case target: String =>
+          fragment == target
+        case target if target.getClass.isArray =>
+          target.asInstanceOf[Array[String]].contains(fragment)
+      }
+    }
+  }
+
+  private def formEventRDD(iterator: Iterator[String], event: String, target: Any): Iterator[(Option[String], Option[String], Option[String], String, Int)] = {
+    var requestArray = ArrayBuffer[String]()
+    val blockMap = mutable.Map[String, String]()
+
+    // Переменная-флаг, говорит о том, что нового события еще не наступило и можно продолжать обрабатывать строки
+    var inB = false
+    var inOB = false
 
     iterator.flatMap { line =>
-      val blockArray = ArrayBuffer[String]()
-      // Разделение строки на элементы
       val fragments = splitLineViaBrackets(line)
-
-      // Проверяем является ли строка началом искомого События
-      if (fragments.contains(EVENTS(event))){
-        inEB = true
-        //        println("ВОШЛИ В БЛОК")
-        // В переменную blockArray записываются только те элементы, которые:
-        // Не являются: датой, id операции (предполагаются числовым значением длиной более 7 символов) и событием
-        // Являются записью вида: <БАЗА>_<НОМЕР ДОКУМЕНТА>
-        blockArray ++= fragments.filter{ elem =>
-          if(!("(\\d{2})[/.-](\\d{2})[/.-](\\d{4})[_T]".r.findFirstIn(elem).isDefined
-            || "(\\d{4})[/.-](\\d{2})[/.-](\\d{2})[_T]".r.findFirstIn(elem).isDefined
-            || "[a-zA-Z]+,_\\d+_[a-zA-Z]+_\\d+_\\d+:\\d+:\\d+_.\\d+".r.findFirstIn(elem).isDefined)
-            && !(elem.trim.length >= 4 && "^-?\\d+$".r.findFirstIn(elem).isDefined)
-            && !(elem == event)
-            && elem.matches("^\\w+\\d+_+\\d+$"))
-            true
-          else false
+      if (fragments.contains(EVENTS(event))) {
+        inB = true
+        inOB = false
+        collectMapArr(blockMap, requestArray, fragments, target)
+        //  В случае, если в данной строке были заполнены объект Map(date, qsId) и ArrayBuffer[docIds], выводим каждое сочетание, иначе ничего
+        if (blockMap.size > 1 && requestArray.nonEmpty) {
+          val flatArray = requestArray.map { docId => (blockMap.get("event"), blockMap.get("date"), blockMap.get("eventId"), docId, 1) }
+          requestArray.clear()
+          flatArray
         }
-
-        // Если blockArray не пуст, то проверяем содержится ли в нем искомое/ые Событие/ия
-        // и передаем на выход flatMap'а в формате ((Событие, Идентификатор документа), 1)
-        if (blockArray.nonEmpty) {
-          target match {
-            case target: String =>
-              if (blockArray.contains(target)) {
-                inEB = false
-                blockArray.filter(_==target).map{target => ((event, target),1)}
-              }
-              else Seq.empty
-            case target: Array[String] =>
-              if (blockArray.exists(target.contains(_))) {
-                inEB = false
-                blockArray.filter(target.contains).map{target => ((event, target), 1)}
-              }
-              else Seq.empty
-          }
-        }
-        else {
-          Seq.empty
-        }
+        else Seq.empty
       }
-      // Проверка для событий с парными значениями (алгоритм вывода тот же)
-      else if (inEB && (fragments.forall(!EVENTS.contains(_)) || fragments.contains(EVENTS("CARD_SEARCH_END")))){
-        blockArray ++= fragments.filter{ elem =>
-          if (!elem.matches("(\\d{2})[/.-](\\d{2})[/.-](\\d{4})") &&
-            !(elem.trim.length >= 8 && elem.matches("^\\d+$")) &&
-            !(elem == event) &&
-            elem.matches("\\w+_+\\d+"))
-            true
-          else false
-        }
-        if (blockArray.nonEmpty) {
-          target match {
-            case target: String =>
-              if (blockArray.contains(target)) {
-                inEB = false
-                blockArray.filter(_==target).map{target => ((event, target),1)}
-              }
-              else None
-            case target: Array[String] =>
-              if (blockArray.exists(target.contains(_))) {
-                inEB = false
-                blockArray.filter(target.contains).map{target => ((event, target),1)}
-              }
-              else Seq.empty
-          }
-        }
-        else {
-          Seq.empty
-        }
+      else if (fragments.forall(!EVENTS.contains(_))) {
+        inOB = true
+        Seq.empty
       }
-      // В случае выхода из блока события или не нахождения требуемого очищаем все переменные и ничего не выводим
-      else{
-        inEB = false
+      else if (inB) {
+        collectMapArr(blockMap, requestArray, fragments, target)
+        //  В случае, если в данной строке были заполнены объект Map(date, qsId) и ArrayBuffer[docIds], выводим каждое сочетание, иначе ничего
+        if (blockMap.size > 1 && requestArray.nonEmpty) {
+          val flatArray = requestArray.map { docId => (blockMap.get("event"), blockMap.get("date"), blockMap.get("eventId"), docId, 1) }
+          requestArray.clear()
+          flatArray
+        }
+        else Seq.empty
+      }
+      else {
+        //  Если в блоке События не было даты или qsId, то либо проблема данных, либо ошибка обработчика (прекращение работы программы, либо пропуск строки)
+        if (blockMap.size < 2 && blockMap.nonEmpty) {
+          throw new Exception(s"Что-то не так, проблема с данными $blockMap, $requestArray")
+          //          None
+        }
+        blockMap.clear()
+        requestArray.clear()
+        inB = false
         Seq.empty
       }
     }
@@ -116,11 +164,9 @@ object EventCount {
 //    (String, String, Long)
     val logsData = sc.textFile(logsPath, minPartitions = 10) // формируем RDD
 
-    val clearedData = logsData.mapPartitions{ partition =>
-      partition.toSet.iterator
-    }
+
     // В следующей переменной формируем RDD содержащие только блоки CARD_SEARCH в аналогичном формате
-    val eventData = clearedData.mapPartitions { line =>
+    val eventData = logsData.mapPartitions { line =>
         formEventRDD(line, event, target)
     }
 
@@ -138,7 +184,10 @@ object EventCount {
       }
     }
     else {
-      val targetData = eventData.reduceByKey(_ + _).map { case ((event, target), count) => (event, target, count) }.cache()
+      val clearedData = eventData.mapPartitions{ partition =>
+        partition.toSet.iterator
+      }.map{ case (event, _, _, docId, count) => ((event, docId), count)}
+      val targetData = clearedData.reduceByKey(_ + _).map { case ((event, target), count) => (event, target, count) }.cache()
 
       val fs = FileSystem.get(sc.hadoopConfiguration)
       val outputPath = new Path("output/task1")
