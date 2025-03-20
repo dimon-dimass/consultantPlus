@@ -153,21 +153,25 @@ object QSDocOpenCount {
   }
 
 //  Функция решения задачи №2
-  private def qsDocOpenCount(sc: SparkContext, logsPath: String): Unit = {
+  private def qsDocOpenCount(sc: SparkContext, logsPath: String, searchEvent: String, docOpen: String): Unit = {
     val logsData = sc.textFile(logsPath, minPartitions = 10) // формируем RDD
 
+    val clearedData = logsData.mapPartitions{ partition =>
+      partition.toSet.iterator
+    }
+
 //  Формируем RDD  для QuickSearch (QS) блоков в виде: (date, qsId, docId, 0)
-    val qsRDD = logsData.mapPartitions { line =>
-      formEventRDD(line, "QS", 0)
+    val seRDD = clearedData.mapPartitions { line =>
+      formEventRDD(line, searchEvent, 0)
     }.collect{case (date, qsId, docId, count) => ((date, qsId, docId), count)}.cache()
 
-    if (qsRDD.isEmpty()){
+    if (seRDD.isEmpty()){
       throw new Exception(s"Error to compute RDD of QuickSearch (QS) Events either in input file/s or in computation")
     }
 
 //  Принцип идентичен qsRDD, но теперь для DOC_OPEN блоков RDD принимает вид: (date, qsId, docId, 1)
-    val doRDD = logsData.mapPartitions { line =>
-      formEventRDD(line,"DOC_OPEN", 1)
+    val doRDD = clearedData.mapPartitions { line =>
+      formEventRDD(line,docOpen, 1)
     }.collect{case (date, qsId, docId, count) => ((date, qsId, docId), count)}.cache()
 
     if (doRDD.collect().isEmpty){
@@ -175,7 +179,7 @@ object QSDocOpenCount {
     }
 
     // Соединение двух RDD по ключу (date, qsId, docId)
-    val mergedRDD = qsRDD.join(doRDD).map{case (key, (_,count)) => (key, count)}
+    val mergedRDD = seRDD.join(doRDD).map{case (key, (_,count)) => (key, count)}
     val result = mergedRDD.reduceByKey(_ + _).sortByKey().map { case ((date, qsId, docId), count) => s"${date.get}, ${qsId.get}, $docId, $count" }
 
     val fs = FileSystem.get(sc.hadoopConfiguration)
@@ -188,9 +192,18 @@ object QSDocOpenCount {
 
   def main(args: Array[String]): Unit= {
 
-    checkPath(args(0))
+    checkPath(args(0).trim)
+
+    checkEvent(args(1).trim)
+
+    if (!args(2).trim.matches(EVENTS("DOC_OPEN"))){
+      throw new IllegalArgumentException(s"""Third argument must be Event "DOC_OPEN" """)
+    }
 
     val logsPath = args(0)
+    val search = args(1)
+    val docOpen = args(2)
+
     val spark = SparkSession.builder()
       .appName("CardSearch Application")
       .master("local[4]")
@@ -198,7 +211,7 @@ object QSDocOpenCount {
       .getOrCreate()
     val sc = spark.sparkContext
 
-    qsDocOpenCount(sc, logsPath)
+    qsDocOpenCount(sc, logsPath, search, docOpen)
 
     spark.stop
   }

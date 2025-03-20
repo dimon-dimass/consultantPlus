@@ -116,8 +116,11 @@ object EventCount {
 //    (String, String, Long)
     val logsData = sc.textFile(logsPath, minPartitions = 10) // формируем RDD
 
+    val clearedData = logsData.mapPartitions{ partition =>
+      partition.toSet.iterator
+    }
     // В следующей переменной формируем RDD содержащие только блоки CARD_SEARCH в аналогичном формате
-    val eventData = logsData.mapPartitions { line =>
+    val eventData = clearedData.mapPartitions { line =>
         formEventRDD(line, event, target)
     }
 
