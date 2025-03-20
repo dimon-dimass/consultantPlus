@@ -154,14 +154,10 @@ object QSDocOpenCount {
 
 //  Функция решения задачи №2
   private def qsDocOpenCount(sc: SparkContext, logsPath: String, searchEvent: String, docOpen: String): Unit = {
-    val logsData = sc.textFile(logsPath, minPartitions = 10) // формируем RDD
-
-    val clearedData = logsData.mapPartitions{ partition =>
-      partition.toSet.iterator
-    }
+    val logsData = sc.textFile(logsPath, minPartitions = 10) .cache()// формируем RDD
 
 //  Формируем RDD  для QuickSearch (QS) блоков в виде: (date, qsId, docId, 0)
-    val seRDD = clearedData.mapPartitions { line =>
+    val seRDD = logsData.mapPartitions { line =>
       formEventRDD(line, searchEvent, 0)
     }.collect{case (date, qsId, docId, count) => ((date, qsId, docId), count)}.cache()
 
@@ -170,7 +166,7 @@ object QSDocOpenCount {
     }
 
 //  Принцип идентичен qsRDD, но теперь для DOC_OPEN блоков RDD принимает вид: (date, qsId, docId, 1)
-    val doRDD = clearedData.mapPartitions { line =>
+    val doRDD = logsData.mapPartitions { line =>
       formEventRDD(line,docOpen, 1)
     }.collect{case (date, qsId, docId, count) => ((date, qsId, docId), count)}.cache()
 
@@ -178,8 +174,15 @@ object QSDocOpenCount {
       throw new Exception(s"Error to compute RDD of DocumentOpen (DO) Events either in input file/s or in computation")
     }
 
+    val clearedDataSE = seRDD.mapPartitions{ partition =>
+      partition.toSet.iterator
+    }
+    val clearedDataDO = doRDD.mapPartitions{ partition =>
+      partition.toSet.iterator
+    }
+
     // Соединение двух RDD по ключу (date, qsId, docId)
-    val mergedRDD = seRDD.join(doRDD).map{case (key, (_,count)) => (key, count)}
+    val mergedRDD = clearedDataSE.join(clearedDataDO).map{case (key, (_,count)) => (key, count)}
     val result = mergedRDD.reduceByKey(_ + _).sortByKey().map { case ((date, qsId, docId), count) => s"${date.get}, ${qsId.get}, $docId, $count" }
 
     val fs = FileSystem.get(sc.hadoopConfiguration)
